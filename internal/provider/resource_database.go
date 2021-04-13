@@ -5,6 +5,12 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/jackc/pgx/v4"
+	"github.com/lib/pq"
+)
+
+const (
+	dbNameAttr = "name"
 )
 
 func resourceDatabase() *schema.Resource {
@@ -18,7 +24,7 @@ func resourceDatabase() *schema.Resource {
 		DeleteContext: resourceDatabaseDelete,
 
 		Schema: map[string]*schema.Schema{
-			"name": {
+			dbNameAttr: {
 				Description: "Name of the database.",
 				Type:        schema.TypeString,
 				Required:    true,
@@ -28,32 +34,68 @@ func resourceDatabase() *schema.Resource {
 }
 
 func resourceDatabaseCreate(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	// use the meta value to retrieve your client from the provider configure method
-	// client := meta.(*apiClient)
+	conn := meta.(*pgx.Conn)
+	if err := conn.Ping(ctx); err != nil {
+		return diag.FromErr(err)
+	}
+	name := d.Get(dbNameAttr).(string)
 
-	idFromAPI := "my-id"
-	d.SetId(idFromAPI)
+	if name == "" {
+		return diag.Errorf("database name can't be an empty string")
+	}
 
-	return diag.Errorf("not implemented")
+	_, err := conn.Exec(ctx, `CREATE DATABASE `+pq.QuoteIdentifier(name))
+	if err != nil {
+		return diag.FromErr(err)
+	}
+
+	d.SetId(name)
+
+	return resourceDatabaseRead(ctx, d, meta)
 }
 
 func resourceDatabaseRead(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	// use the meta value to retrieve your client from the provider configure method
-	// client := meta.(*apiClient)
+	conn := meta.(*pgx.Conn)
+	if err := conn.Ping(ctx); err != nil {
+		return diag.FromErr(err)
+	}
 
-	return diag.Errorf("not implemented")
+	return nil
 }
 
 func resourceDatabaseUpdate(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	// use the meta value to retrieve your client from the provider configure method
-	// client := meta.(*apiClient)
+	conn := meta.(*pgx.Conn)
+	if err := conn.Ping(ctx); err != nil {
+		return diag.FromErr(err)
+	}
 
-	return diag.Errorf("not implemented")
+	if d.HasChange(dbNameAttr) {
+		oraw, nraw := d.GetChange(dbNameAttr)
+		o := oraw.(string)
+		n := nraw.(string)
+		if n == "" {
+			return diag.Errorf("database name can't be an empty string")
+		}
+		_, err := conn.Exec(ctx,
+			`ALTER DATABASE `+
+				pq.QuoteIdentifier(o)+
+				` RENAME TO `+
+				pq.QuoteIdentifier(n),
+		)
+		if err != nil {
+			return diag.FromErr(err)
+		}
+		d.SetId(n)
+	}
+
+	return resourceDatabaseRead(ctx, d, meta)
 }
 
 func resourceDatabaseDelete(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	// use the meta value to retrieve your client from the provider configure method
-	// client := meta.(*apiClient)
+	conn := meta.(*pgx.Conn)
+	if err := conn.Ping(ctx); err != nil {
+		return diag.FromErr(err)
+	}
 
 	return diag.Errorf("not implemented")
 }

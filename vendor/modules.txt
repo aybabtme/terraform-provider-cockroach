@@ -189,6 +189,7 @@ github.com/jstemmer/go-junit-report
 github.com/jstemmer/go-junit-report/formatter
 github.com/jstemmer/go-junit-report/parser
 # github.com/lib/pq v1.10.0
+## explicit
 github.com/lib/pq
 github.com/lib/pq/oid
 github.com/lib/pq/scram

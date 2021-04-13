@@ -9,7 +9,13 @@ description: |-
 
 Sample data source in the Terraform provider scaffolding.
 
+## Example Usage
 
+```terraform
+data "cockroach_database" "example" {
+  name = "foo"
+}
+```
 
 ## Schema
 

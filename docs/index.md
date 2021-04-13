@@ -18,3 +18,7 @@ provider "cockroach" {
 ```
 
 ## Schema
+
+### Required
+
+- **dsn** (String) DSN to connect to the Cockroach cluster.

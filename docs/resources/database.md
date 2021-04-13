@@ -9,7 +9,13 @@ description: |-
 
 Database in a CockroachDB cluster.
 
+## Example Usage
 
+```terraform
+resource "cockroach_database" "example" {
+  name = "foo"
+}
+```
 
 ## Schema
 

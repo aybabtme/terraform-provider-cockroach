@@ -27,6 +27,13 @@ func init() {
 func New(version string) func() *schema.Provider {
 	return func() *schema.Provider {
 		p := &schema.Provider{
+			Schema: map[string]*schema.Schema{
+				"dsn": {
+					Type:        schema.TypeString,
+					Required:    true,
+					Description: "DSN to connect to the Cockroach cluster.",
+				},
+			},
 			DataSourcesMap: map[string]*schema.Resource{
 				"cockroach_database": dataSourceDatabase(),
 			},
