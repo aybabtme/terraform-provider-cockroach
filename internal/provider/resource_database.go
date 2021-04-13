@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"strconv"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
@@ -10,7 +11,8 @@ import (
 )
 
 const (
-	dbNameAttr = "name"
+	dbNameAttr  = "name"
+	dbOwnerAttr = "owner"
 )
 
 func resourceDatabase() *schema.Resource {
@@ -28,6 +30,12 @@ func resourceDatabase() *schema.Resource {
 				Description: "Name of the database.",
 				Type:        schema.TypeString,
 				Required:    true,
+			},
+			dbOwnerAttr: {
+				Description: "Owner of the database.",
+				Type:        schema.TypeString,
+				Optional:    true,
+				Computed:    true,
 			},
 		},
 	}
@@ -49,7 +57,15 @@ func resourceDatabaseCreate(ctx context.Context, d *schema.ResourceData, meta in
 		return diag.FromErr(err)
 	}
 
-	d.SetId(name)
+	var id int
+	err = conn.QueryRow(ctx, `SELECT id FROM crdb_internal.databases WHERE name = $1`, name).Scan(
+		&id,
+	)
+	if err != nil {
+		return diag.FromErr(err)
+	}
+
+	d.SetId(strconv.Itoa(id))
 
 	return resourceDatabaseRead(ctx, d, meta)
 }
@@ -57,6 +73,24 @@ func resourceDatabaseCreate(ctx context.Context, d *schema.ResourceData, meta in
 func resourceDatabaseRead(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
 	conn := meta.(*pgx.Conn)
 	if err := conn.Ping(ctx); err != nil {
+		return diag.FromErr(err)
+	}
+	id := d.Id()
+	var (
+		name  string
+		owner string
+	)
+	err := conn.QueryRow(ctx, `SELECT name, owner FROM crdb_internal.databases WHERE id = $1`, id).Scan(
+		&name,
+		&owner,
+	)
+	if err != nil {
+		return diag.FromErr(err)
+	}
+	if err := d.Set(dbNameAttr, name); err != nil {
+		return diag.FromErr(err)
+	}
+	if err := d.Set(dbOwnerAttr, owner); err != nil {
 		return diag.FromErr(err)
 	}
 
@@ -97,5 +131,18 @@ func resourceDatabaseDelete(ctx context.Context, d *schema.ResourceData, meta in
 		return diag.FromErr(err)
 	}
 
-	return diag.Errorf("not implemented")
+	name := d.Get(dbNameAttr).(string)
+
+	if name == "" {
+		return diag.Errorf("database name can't be an empty string")
+	}
+
+	_, err := conn.Exec(ctx, `DROP DATABASE `+pq.QuoteIdentifier(name))
+	if err != nil {
+		return diag.FromErr(err)
+	}
+
+	d.SetId("")
+
+	return nil
 }
