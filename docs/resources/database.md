@@ -26,5 +26,6 @@ resource "cockroach_database" "example" {
 ### Optional
 
 - **id** (String) The ID of this resource.
+- **owner** (String) Owner of the database.
 
 
