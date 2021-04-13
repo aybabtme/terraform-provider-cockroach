@@ -18,16 +18,13 @@
 // from your PATH.
 //
 // To use, run as follows:
-//   import "github.com/cockroachdb/cockroach-go/testserver"
+//   import "github.com/cockroachdb/cockroach-go/v2/testserver"
 //   import "testing"
 //   import "time"
 //
 //   func TestRunServer(t *testing.T) {
 //      ts, err := testserver.NewTestServer()
 //      if err != nil {
-//        t.Fatal(err)
-//      }
-//      if err := ts.Start(); err != nil {
 //        t.Fatal(err)
 //      }
 //      defer ts.Stop()
@@ -46,6 +43,7 @@
 package testserver
 
 import (
+	"bufio"
 	"bytes"
 	"database/sql"
 	"errors"
@@ -66,9 +64,11 @@ import (
 
 	// Import postgres driver.
 	_ "github.com/lib/pq"
+
+	"github.com/cockroachdb/cockroach-go/v2/testserver/version"
 )
 
-var customBinary = flag.String("cockroach-binary", "", "Use specified cockroach binary")
+var customBinaryFlag = flag.String("cockroach-binary", "", "Use specified cockroach binary")
 
 const (
 	stateNew = 1 + iota
@@ -98,7 +98,7 @@ type TestServer interface {
 	PGURL() *url.URL
 	// WaitForInit retries until a SQL connection is successfully established to
 	// this server.
-	WaitForInit(db *sql.DB) error
+	WaitForInit() error
 }
 
 // testServerImpl is a TestServer implementation.
@@ -110,6 +110,10 @@ type testServerImpl struct {
 	pgURL      struct {
 		set chan struct{}
 		u   *url.URL
+		// The original URL is preserved here if we are using a custom password.
+		// In that case, the one below uses client certificates, if secure (and
+		// no password otherwise).
+		orig url.URL
 	}
 	cmd              *exec.Cmd
 	cmdArgs          []string
@@ -121,14 +125,16 @@ type testServerImpl struct {
 
 	// curTenantID is used to allocate tenant IDs. Refer to NewTenantServer for
 	// more information.
-	curTenantID int
+	curTenantID  int
+	proxyAddr    string      // empty if no sql proxy running yet
+	proxyProcess *os.Process // empty if no sql proxy running yet
 }
 
 // NewDBForTest creates a new CockroachDB TestServer instance and
 // opens a SQL database connection to it. Returns a sql *DB instance and a
 // shutdown function. The caller is responsible for executing the
 // returned shutdown function on exit.
-func NewDBForTest(t *testing.T, opts ...testServerOpt) (*sql.DB, func()) {
+func NewDBForTest(t *testing.T, opts ...TestServerOpt) (*sql.DB, func()) {
 	t.Helper()
 	return NewDBForTestWithDatabase(t, "", opts...)
 }
@@ -138,20 +144,15 @@ func NewDBForTest(t *testing.T, opts ...testServerOpt) (*sql.DB, func()) {
 // specified, the returned connection will explicitly connect to
 // it. Returns a sql *DB instance a shutdown function. The caller is
 // responsible for executing the returned shutdown function on exit.
-func NewDBForTestWithDatabase(t *testing.T, database string, opts ...testServerOpt) (*sql.DB, func()) {
+func NewDBForTestWithDatabase(
+	t *testing.T, database string, opts ...TestServerOpt,
+) (*sql.DB, func()) {
 	t.Helper()
 	ts, err := NewTestServer(opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := ts.Start(); err != nil {
-		t.Fatal(err)
-	}
-
 	url := ts.PGURL()
-	if url == nil {
-		t.Fatalf("url not found")
-	}
 	if len(database) > 0 {
 		url.Path = database
 	}
@@ -161,27 +162,34 @@ func NewDBForTestWithDatabase(t *testing.T, database string, opts ...testServerO
 		t.Fatal(err)
 	}
 
-	if err := ts.WaitForInit(db); err != nil {
-		t.Fatal(err)
-	}
-
 	return db, func() {
 		_ = db.Close()
 		ts.Stop()
 	}
 }
 
-type testServerOpt func(args *testServerArgs)
+// TestServerOpt is passed to NewTestServer.
+type TestServerOpt func(args *testServerArgs)
 
 type testServerArgs struct {
 	secure bool
+	rootPW string // if nonempty, set as pw for root
 }
 
 // SecureOpt is a TestServer option that can be passed to NewTestServer to
 // enable secure mode.
-func SecureOpt() testServerOpt {
+func SecureOpt() TestServerOpt {
 	return func(args *testServerArgs) {
 		args.secure = true
+	}
+}
+
+// RootPasswordOpt is a TestServer option that, when passed to NewTestServer,
+// sets the given password for the root user (and returns a URL using it from
+// PGURL(). This avoids having to use client certs.
+func RootPasswordOpt(pw string) TestServerOpt {
+	return func(args *testServerArgs) {
+		args.rootPW = pw
 	}
 }
 
@@ -190,20 +198,28 @@ const (
 	certsDirName = "certs"
 )
 
-// NewTestServer creates a new TestServer, but does not start it.
+// NewTestServer creates a new TestServer and starts it.
+// It also waits until the server is ready to accept clients,
+// so it safe to connect to the server returned by this function right away.
 // The cockroach binary for your OS and ARCH is downloaded automatically.
 // If the download fails, we attempt just call "cockroach", hoping it is
 // found in your path.
-func NewTestServer(opts ...testServerOpt) (TestServer, error) {
+func NewTestServer(opts ...TestServerOpt) (TestServer, error) {
 	serverArgs := &testServerArgs{}
 	for _, applyOptToArgs := range opts {
 		applyOptToArgs(serverArgs)
 	}
 
 	var cockroachBinary string
+
+	if len(*customBinaryFlag) > 0 {
+		cockroachBinary = *customBinaryFlag
+	} else if customBinaryEnv := os.Getenv("COCKROACH_BINARY"); customBinaryEnv != "" {
+		cockroachBinary = customBinaryEnv
+	}
+
 	var err error
-	if len(*customBinary) > 0 {
-		cockroachBinary = *customBinary
+	if cockroachBinary != "" {
 		log.Printf("Using custom cockroach binary: %s", cockroachBinary)
 	} else if cockroachBinary, err = downloadLatestBinary(); err != nil {
 		log.Printf("Failed to fetch latest binary: %s, attempting to use cockroach binary from your PATH", err)
@@ -259,9 +275,32 @@ func NewTestServer(opts ...testServerOpt) (TestServer, error) {
 		secureOpt = "--certs-dir=" + certsDir
 	}
 
+	// v19.1 and earlier do not have the `start-single-node` subcommand,
+	// so use `start` for those versions.
+	// TODO(rafi): Remove the version check and `start` once we stop testing 19.1.
+	versionCmd := exec.Command(cockroachBinary, "version")
+	versionOutput, err := versionCmd.CombinedOutput()
+	if err != nil {
+		return nil, err
+	}
+	reader := bufio.NewReader(bytes.NewReader(versionOutput))
+	versionLine, err := reader.ReadString('\n')
+	if err != nil {
+		return nil, err
+	}
+	versionLineTokens := strings.Fields(versionLine)
+	v, err := version.Parse(versionLineTokens[2])
+	if err != nil {
+		return nil, err
+	}
+	startCmd := "start-single-node"
+	if !v.AtLeast(version.MustParse("v19.2.0-alpha")) {
+		startCmd = "start"
+	}
+
 	args := []string{
 		cockroachBinary,
-		"start",
+		startCmd,
 		"--logtostderr",
 		secureOpt,
 		"--host=localhost",
@@ -282,6 +321,19 @@ func NewTestServer(opts ...testServerOpt) (TestServer, error) {
 		curTenantID:      firstTenantID,
 	}
 	ts.pgURL.set = make(chan struct{})
+
+	if err := ts.Start(); err != nil {
+		return nil, err
+	}
+
+	if ts.PGURL() == nil {
+		return nil, errors.New("testserver: url not found")
+	}
+
+	if err := ts.WaitForInit(); err != nil {
+		return nil, err
+	}
+
 	return ts, nil
 }
 
@@ -311,13 +363,18 @@ func (ts *testServerImpl) setPGURL(u *url.URL) {
 }
 
 // WaitForInit retries until a connection is successfully established.
-func (ts *testServerImpl) WaitForInit(db *sql.DB) error {
+func (ts *testServerImpl) WaitForInit() error {
 	var err error
+	db, err := sql.Open("postgres", ts.PGURL().String())
+	if err != nil {
+		return err
+	}
+	defer db.Close()
 	for i := 0; i < 50; i++ {
 		if _, err = db.Query("SHOW DATABASES"); err == nil {
 			return err
 		}
-		log.Printf("WaitForInit: %v", err)
+		log.Printf("WaitForInit: Trying again after error: %v", err)
 		time.Sleep(time.Millisecond * 100)
 	}
 	return err
@@ -346,6 +403,23 @@ func (ts *testServerImpl) pollListeningURLFile() error {
 	u, err := url.Parse(string(bytes.TrimSpace(data)))
 	if err != nil {
 		return fmt.Errorf("failed to parse SQL URL: %v", err)
+	}
+	ts.pgURL.orig = *u
+	if pw := ts.serverArgs.rootPW; pw != "" {
+		db, err := sql.Open("postgres", u.String())
+		if err != nil {
+			return err
+		}
+		defer db.Close()
+		if _, err := db.Exec(`ALTER USER $1 WITH PASSWORD $2`, "root", pw); err != nil {
+			return err
+		}
+
+		v := u.Query()
+		v.Del("sslkey")
+		v.Del("sslcert")
+		u.RawQuery = v.Encode()
+		u.User = url.UserPassword("root", pw)
 	}
 	ts.setPGURL(u)
 
@@ -466,6 +540,10 @@ func (ts *testServerImpl) Stop() {
 	if ts.state != stateStopped {
 		// Only call kill if not running. It could have exited properly.
 		_ = ts.cmd.Process.Kill()
+
+		if p := ts.proxyProcess; p != nil {
+			_ = p.Kill()
+		}
 	}
 
 	// Only cleanup on intentional stops.

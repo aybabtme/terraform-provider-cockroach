@@ -3,12 +3,13 @@ package provider
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/stretchr/testify/require"
 
-	"github.com/cockroachdb/cockroach-go/testserver"
 	_ "github.com/cockroachdb/cockroach-go/v2/crdb"
+	"github.com/cockroachdb/cockroach-go/v2/testserver"
 	"github.com/jackc/pgx/v4"
 )
 
@@ -22,13 +23,21 @@ var providerFactories = map[string]func() (*schema.Provider, error){
 }
 
 func TestProvider(t *testing.T) {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	t.Log("creating test server")
 	ts, err := testserver.NewTestServer()
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ts.Stop()
+	t.Log("created and started")
+	defer func() {
+		ts.Stop()
+		t.Log("all good!")
+	}()
 
+	t.Log("connecting to server")
 	conn, err := pgx.Connect(ctx, ts.PGURL().String())
 	require.NoError(t, err)
 	require.NoError(t, conn.Ping(ctx))

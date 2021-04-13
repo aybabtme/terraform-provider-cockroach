@@ -1,19 +1,19 @@
 ---
-page_title: "scaffolding Provider"
+page_title: "cockroach Provider"
 subcategory: ""
 description: |-
   
 ---
 
-# scaffolding Provider
+# cockroach Provider
 
 
 
 ## Example Usage
 
 ```terraform
-provider "scaffolding" {
-  # example configuration here
+provider "cockroach" {
+  dsn = "postgresql://root@localhost:26257?sslmode=disable"
 }
 ```
 
