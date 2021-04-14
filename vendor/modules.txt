@@ -224,7 +224,7 @@ github.com/posener/complete/cmd/install
 github.com/posener/complete/match
 # github.com/russross/blackfriday v1.5.2
 github.com/russross/blackfriday
-# github.com/stretchr/testify v1.6.1
+# github.com/stretchr/testify v1.7.0
 ## explicit
 github.com/stretchr/testify/assert
 github.com/stretchr/testify/require
