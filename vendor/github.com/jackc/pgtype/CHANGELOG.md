@@ -1,3 +1,23 @@
+# 1.8.1 (July 24, 2021)
+
+* Cleaned up Go module dependency chain
+
+# 1.8.0 (July 10, 2021)
+
+* Maintain host bits for inet types (Cameron Daniel)
+* Support pointers of wrapping structs (Ivan Daunis)
+* Register JSONBArray at NewConnInfo() (Rueian)
+* CompositeTextScanner handles backslash escapes
+
+# 1.7.0 (March 25, 2021)
+
+* Fix scanning int into **sql.Scanner implementor
+* Add tsrange array type (Vasilii Novikov)
+* Fix: escaped strings when they start or end with a newline char (Stephane Martin)
+* Accept nil *time.Time in Time.Set
+* Fix numeric NaN support
+* Use Go 1.13 errors instead of xerrors
+
 # 1.6.2 (December 3, 2020)
 
 * Fix panic on assigning empty array to non-slice or array
